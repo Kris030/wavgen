@@ -21,7 +21,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn generate_pcm(channels: usize, samplerate: usize, bytes_per_sample: usize) -> Vec<u8> {
-    let seconds = 5;
+    let seconds = 1;
     let samples = samplerate * seconds;
 
     let mut data = vec![0; samples * channels * bytes_per_sample];

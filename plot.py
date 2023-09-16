@@ -3,10 +3,16 @@ from matplotlib.widgets import Slider
 import matplotlib.pyplot as plt
 import simpleaudio
 import numpy as np
+import argparse
 import wave
 import sys
 
-spf = wave.open('test.wav', 'r')
+parser = argparse.ArgumentParser(description='Plot da wave')
+parser.add_argument('--play', '-p', action='store_true', help='play da sound?')
+parser.add_argument('input_file', help='the wav file ya retard')
+args = parser.parse_args()
+
+spf = wave.open(args.input_file, 'r')
 
 # Extract Raw Audio from Wav File
 signal = spf.readframes(-1)
@@ -20,6 +26,7 @@ if spf.getnchannels() != 1:
 to_plot = signal / 0x7FFF
 
 fig, ax = plt.subplots()
+
 ax.set_title('Wave')
 ax.set_xlabel('Time')
 ax.set_ylabel('Amplitude')
@@ -48,7 +55,7 @@ def update(_):
 	ax.axis([
 		p - z,
 		p + z,
-		-1, 1
+		-1, 1,
 	])
 	fig.canvas.draw_idle()
 
@@ -59,6 +66,7 @@ zoom.on_changed(update)
 
 fig.canvas.manager.set_window_title('Wave')
 
-simpleaudio.play_buffer(signal, 1, 2, spf.getframerate())
+if args.play:
+	simpleaudio.play_buffer(signal, 1, 2, spf.getframerate())
 
 plt.show()

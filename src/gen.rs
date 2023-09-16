@@ -25,16 +25,21 @@ pub fn get_sample(gi: GenerationInfo) -> i16 {
     scaled.clamp(i16::MIN, i16::MAX)
 }
 
-pub fn get_sources(gi: GenerationInfo) -> [f64; 3] {
-    let freq = 50.;
+pub fn get_sources(gi: GenerationInfo) -> [f64; 4] {
+    let freq = 10.;
+    let x = gi.t * std::f64::consts::TAU * freq;
 
-    [
-        f64::sin(gi.t * std::f64::consts::TAU * freq),
-        f64::sin(0.5 * gi.t * std::f64::consts::TAU * freq),
-        f64::cos(2. * gi.t * std::f64::consts::TAU * freq),
-    ]
+    let f = f64::sin(x);
+
+    let g = f64::cos(0.5 * x + std::f64::consts::FRAC_PI_2) / 2.;
+
+    let h = f64::sin(3. * x);
+
+    let n = (f64::sin(10. * x) + f64::sin(20. * x) + f64::sin(30. * x)) / 10.;
+
+    [f, g, h, n]
 }
 
 pub fn mix_sources(sources: &[f64]) -> f64 {
-    sources.iter().sum::<f64>() / (sources.len() as f64).sqrt()
+    sources.iter().sum::<f64>() / (5f64).sqrt()
 }
