@@ -33,13 +33,15 @@ pub fn get_sample(gi: GenerationInfo) -> i16 {
 pub fn get_sources(gi: GenerationInfo) -> impl IntoIterator<Item = f64> {
     let t = gi.t;
 
-    let freq1 = (f64::sin(t * 2.0 * PI) + 1.) * 30. + 30.;
+    let freq1 = (f64::sin(t) + 1.) * 30. + 30.;
 
     [
-        sine(t, freq1, 0.5),        //
-        harmonic(3, t, freq1, 0.5), //
+        sine(t, freq1, 0.5),         //
+        harmonic(3, t, freq1, 0.5),  //
+        harmonic(5, t, freq1, 0.75), //
         triangle(t, freq1, 0.),
-        triangle(t, 60., 0.),
+        triangle(t, lerp(t.fract(), 40., 100.), 0.),
+        square(t, freq1, 0.) * 0.1,
     ]
 }
 
