@@ -1,14 +1,12 @@
 #!/bin/env python3
 from matplotlib.widgets import Slider
 import matplotlib.pyplot as plt
-import simpleaudio
 import numpy as np
 import argparse
 import wave
 import sys
 
 parser = argparse.ArgumentParser(description='Plot da wave')
-parser.add_argument('--play', '-p', action='store_true', help='play da sound?')
 parser.add_argument('input_file', help='the wav file ya retard')
 args = parser.parse_args()
 
@@ -65,8 +63,5 @@ spos.on_changed(update)
 zoom.on_changed(update)
 
 fig.canvas.manager.set_window_title('Wave')
-
-if args.play:
-	simpleaudio.play_buffer(signal, 1, 2, spf.getframerate())
 
 plt.show()
