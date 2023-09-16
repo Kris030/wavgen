@@ -28,7 +28,7 @@ to_plot = signal / 0x7FFF
 fig, ax = plt.subplots()
 
 ax.set_title('Wave')
-ax.set_xlabel('Time')
+ax.set_xlabel('Sample')
 ax.set_ylabel('Amplitude')
 
 plt.subplots_adjust(bottom=0.25)
