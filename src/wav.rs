@@ -54,3 +54,19 @@ impl WaveDesc {
         w.write_all(data)
     }
 }
+
+pub fn write_to_wav(
+    channels: usize,
+    sample_rate: usize,
+    bytes_per_sample: usize,
+    data: &[u8],
+    w: impl Write,
+) -> Result<(), std::io::Error> {
+    let desc = &WaveDesc::from_data(
+        channels as u16,
+        sample_rate as u32,
+        (bytes_per_sample * 8) as u16,
+    );
+
+    desc.write(data, w)
+}

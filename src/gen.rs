@@ -1,66 +1,144 @@
-use std::{
-    f64::consts::{PI, TAU},
-    time::Duration,
-};
+use std::f64::consts::{PI, TAU};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GenerationInfo {
-    channel: usize,
-    t: f64,
+#[derive(Debug)]
+pub struct Song {
+    pub name: String,
 
-    total_time: Option<f64>,
-    total_channels: usize,
+    pub(crate) channels: usize,
+    pub(crate) length: f64,
+
+    pub(crate) sources: Vec<Source>,
 }
 
-impl GenerationInfo {
-    pub fn new(channel: usize, t: f64, total_time: Option<f64>, total_channels: usize) -> Self {
-        Self {
-            channel,
-            t,
-            total_time,
-            total_channels,
+impl Song {
+    pub fn length(&self) -> f64 {
+        self.length
+    }
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+}
+
+#[derive(Debug)]
+pub struct Source {
+    pub(crate) ty: SourceType,
+    pub(crate) start: f64,
+    pub(crate) end: f64,
+    pub(crate) volume: f64,
+    pub(crate) channels: Vec<usize>,
+
+    pub(crate) effects: Vec<Effect>,
+}
+#[derive(Debug)]
+pub enum SourceType {
+    Sine { freq: f64, phase: f64 },
+    Saw { freq: f64, phase: f64 },
+    Square { freq: f64, phase: f64 },
+    Triangle { freq: f64, phase: f64 },
+}
+
+impl SourceType {
+    pub fn gen(&mut self, gi: GenInfo) -> f64 {
+        match *self {
+            SourceType::Sine { freq, phase } => sine(gi.t, freq, phase),
+            SourceType::Saw { freq, phase } => saw(gi.t, freq, phase),
+            SourceType::Square { freq, phase } => square(gi.t, freq, phase),
+            SourceType::Triangle { freq, phase } => triangle(gi.t, freq, phase),
         }
     }
 }
 
-pub fn get_sample(gi: GenerationInfo) -> i16 {
-    let mixed: f64 = mix_sources(get_sources(gi).into_iter(), gi);
-    let scaled = (mixed * i16::MAX as f64) as i16;
-
-    scaled.clamp(i16::MIN, i16::MAX)
+#[derive(Debug)]
+pub enum EffectType {
+    FadeIn,
+    FadeOut,
 }
 
-pub fn get_sources(gi: GenerationInfo) -> impl IntoIterator<Item = f64> {
-    let t = gi.t;
-
-    let freq1 = (f64::sin(t) + 1.) * 30. + 30.;
-
-    [
-        sine(t, freq1, 0.5),         //
-        harmonic(3, t, freq1, 0.5),  //
-        harmonic(5, t, freq1, 0.75), //
-        triangle(t, freq1, 0.),
-        triangle(t, lerp(t.fract(), 40., 100.), 0.),
-        square(t, freq1, 0.) * 0.1,
-    ]
+impl EffectType {
+    pub fn apply(&mut self, v: f64, gi: GenInfo) -> f64 {
+        match *self {
+            EffectType::FadeIn => v * gi.t,
+            EffectType::FadeOut => v * (1. - gi.t),
+        }
+    }
 }
 
-pub fn mix_sources(sources: impl Iterator<Item = f64>, gi: GenerationInfo) -> f64 {
-    let mut count: usize = 0;
-    let mut sum = 0.;
+#[derive(Debug)]
+pub struct Effect {
+    ty: EffectType,
+    start: f64,
+    end: f64,
+}
 
-    for s in sources {
-        sum += s;
-        count += 1;
+impl Effect {
+    pub fn apply(&mut self, v: f64, gi: GenInfo) -> f64 {
+        self.ty.apply(v, gi)
+    }
+}
+
+impl Source {
+    pub fn gen(&mut self, gi: GenInfo) -> f64 {
+        let mut v = self.ty.gen(gi);
+
+        let len = self.length();
+        for e in &mut self.effects {
+            if (e.start..=e.end).contains(&gi.t) {
+                let si = GenInfo::new(gi, e.start, len);
+                v = e.apply(v, si);
+            }
+        }
+
+        v * self.volume
     }
 
-    let v = (sum / count as f64) * 0.8;
+    pub fn length(&self) -> f64 {
+        self.end - self.start
+    }
+}
 
-    fade_out(
-        fade_in(v, Duration::from_millis(100), gi),
-        Duration::from_millis(100),
-        gi,
-    )
+#[derive(Debug, Clone, Copy)]
+pub struct GenInfo {
+    pub(crate) channel: usize,
+    pub(crate) t: f64,
+}
+
+impl GenInfo {
+    pub fn new(parent: GenInfo, start: f64, len: f64) -> Self {
+        Self {
+            channel: parent.channel,
+            t: (parent.t - start) / len,
+        }
+    }
+}
+
+pub fn get_sample(s: &mut Song, gi: GenInfo) -> f64 {
+    let values = s.sources.iter_mut().filter_map(|src| {
+        if !((src.start..=src.end).contains(&gi.t) && src.channels.contains(&gi.channel)) {
+            return None;
+        }
+
+        let si = GenInfo::new(gi, src.start, src.length());
+
+        Some(src.gen(si))
+    });
+
+    let mixed: f64 = values.sum();
+
+    mixed
+}
+
+pub fn lerp(t: f64, s: f64, e: f64) -> f64 {
+    s * (1. - t) + e * t
+}
+pub fn sin_interpolate(t: f64, s: f64, e: f64) -> f64 {
+    if t <= 0. {
+        0.
+    } else if t >= 1. {
+        1.
+    } else {
+        let t = f64::sin(t * std::f64::consts::FRAC_PI_2);
+        s * (1. - t) + e * t
+    }
 }
 
 pub fn sine(t: f64, freq: f64, phase: f64) -> f64 {
@@ -82,39 +160,6 @@ pub fn square(t: f64, freq: f64, phase: f64) -> f64 {
 pub fn triangle(t: f64, freq: f64, phase: f64) -> f64 {
     ((f64::fract(t * freq + phase) * 2. - 1.).abs() - 0.5) * 2.
 }
-pub fn fade_in(v: f64, dur: Duration, gi: GenerationInfo) -> f64 {
-    let dur = dur.as_secs_f64();
-
-    if gi.t >= dur {
-        return v;
-    }
-
-    v * (gi.t / dur)
-}
-pub fn fade_out(v: f64, dur: Duration, gi: GenerationInfo) -> f64 {
-    let dur = dur.as_secs_f64();
-
-    let left = gi.total_time.unwrap() - gi.t;
-    if left >= dur {
-        return v;
-    }
-
-    v * (left / dur)
-}
-
-pub fn lerp(t: f64, s: f64, e: f64) -> f64 {
-    s * (1. - t) + e * t
-}
-pub fn sin_interpolate(t: f64, s: f64, e: f64) -> f64 {
-    if t <= 0. {
-        0.
-    } else if t >= 1. {
-        1.
-    } else {
-        let t = f64::sin(t * std::f64::consts::FRAC_PI_2);
-        s * (1. - t) + e * t
-    }
-}
 
 pub fn harmonic(nth: usize, t: f64, freq: f64, phase: f64) -> f64 {
     sine(t, freq * nth as f64, phase)
@@ -124,10 +169,10 @@ pub fn overtone(nth: usize, t: f64, freq: f64, phase: f64) -> f64 {
     harmonic(nth, t, freq, phase + PI)
 }
 
-pub fn harmonics<const H: usize>(t: f64, freq: f64, phase: f64) -> [f64; H] {
-    std::array::from_fn(|i| harmonic(i, t, freq, phase))
+pub fn harmonics(n: usize, t: f64, freq: f64, phase: f64) -> Vec<f64> {
+    (0..n).map(|i| harmonic(i, t, freq, phase)).collect()
 }
 
-pub fn overtones<const H: usize>(t: f64, freq: f64, phase: f64) -> [f64; H] {
-    harmonics(t, freq, phase + PI)
+pub fn overtones(n: usize, t: f64, freq: f64, phase: f64) -> Vec<f64> {
+    harmonics(n, t, freq, phase + PI)
 }
