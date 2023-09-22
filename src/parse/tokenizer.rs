@@ -2,26 +2,17 @@ use thiserror::Error as ThisError;
 
 use super::source::{Diagnostic, DiagnosticLevel, Source};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IntegerValue {
-    Integer(u64),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FloatValue {
-    Double(f64),
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Identifier,
     Whitespace,
 
-    IntLiteral(IntegerValue),
-    FloatLiteral(FloatValue),
+    IntLiteral(u64),
+    FloatLiteral(f64),
     StringLiteral(String),
     CharLiteral(char),
     DurationLiteral(f64),
+    FreqLiteral(f64),
 
     SingleLineComment,
     MultiLineComment,
@@ -120,7 +111,7 @@ pub struct TokenPosition<'s, S> {
     pub(crate) line: usize,
     pub(crate) column: usize,
 }
-impl<'s, S> TokenPosition<'s, S> {
+impl<'s, S: Source> TokenPosition<'s, S> {
     pub fn len(&self) -> usize {
         self.end - self.start
     }
@@ -146,6 +137,10 @@ impl<'s, S> TokenPosition<'s, S> {
 
     pub fn column(&self) -> usize {
         self.column
+    }
+
+    pub fn get_text(&self) -> Option<&str> {
+        self.source.get_text(self.into())
     }
 }
 impl<'s, S> From<&TokenPosition<'s, S>> for std::ops::Range<usize> {
@@ -304,7 +299,7 @@ impl<'s, S: Source> Tokenizer<'s, S> {
         let t_type = match first_char {
             d @ '0'..='9' => {
                 let num = self.get_num(d)?;
-                self.get_num_or_dur(num)?
+                self.get_num_like(num)?
             }
 
             '+' => match self.get_char()? {
@@ -646,7 +641,7 @@ impl<'s, S: Source> Tokenizer<'s, S> {
 
             c => {
                 self.add_buffer(c);
-                Ok(TokenType::IntLiteral(IntegerValue::Integer(int_part)))
+                Ok(TokenType::IntLiteral(int_part))
             }
         }
     }
@@ -672,7 +667,7 @@ impl<'s, S: Source> Tokenizer<'s, S> {
         if s.is_empty() {
             self.add_buffer(Some('.'));
 
-            return Ok(TokenType::IntLiteral(IntegerValue::Integer(int_part)));
+            return Ok(TokenType::IntLiteral(int_part));
         }
 
         let mut fract = 0.;
@@ -682,15 +677,13 @@ impl<'s, S: Source> Tokenizer<'s, S> {
             fract += *i as f64 * x;
         }
 
-        Ok(TokenType::FloatLiteral(FloatValue::Double(
-            int_part as f64 + fract,
-        )))
+        Ok(TokenType::FloatLiteral(int_part as f64 + fract))
     }
 
-    fn get_num_or_dur(&mut self, num: TokenType) -> Result<TokenType, TokenizerError<S::Error>> {
+    fn get_num_like(&mut self, num: TokenType) -> Result<TokenType, TokenizerError<S::Error>> {
         let v = match num {
-            TokenType::IntLiteral(IntegerValue::Integer(v)) => v as f64,
-            TokenType::FloatLiteral(FloatValue::Double(v)) => v,
+            TokenType::IntLiteral(v) => v as f64,
+            TokenType::FloatLiteral(v) => v,
 
             _ => unreachable!(),
         };
@@ -702,6 +695,16 @@ impl<'s, S: Source> Tokenizer<'s, S> {
                 Some('s') => Ok(TokenType::DurationLiteral(v * 0.0001)),
 
                 c => {
+                    self.add_buffer(c);
+                    Ok(TokenType::DurationLiteral(v * 1000.))
+                }
+            },
+
+            Some('h') => match self.get_char()? {
+                Some('z') => Ok(TokenType::FreqLiteral(v * 0.0001)),
+
+                c => {
+                    self.add_buffer(Some('h'));
                     self.add_buffer(c);
                     Ok(TokenType::DurationLiteral(v * 1000.))
                 }

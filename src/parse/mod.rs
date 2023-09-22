@@ -1,8 +1,8 @@
 use self::{
     source::{Source, StringSource},
-    tokenizer::{FloatValue, IntegerValue, Token, TokenType},
+    tokenizer::{Token, TokenType, Tokenizer},
 };
-use crate::gen::Song;
+use crate::gen::{self, Song};
 use thiserror::Error as ThisError;
 
 pub mod printing;
@@ -51,7 +51,7 @@ pub fn get_song<'src, 'name: 'src>(
     };
 
     let Some(Token {
-        t_type: TokenType::IntLiteral(IntegerValue::Integer(channels)),
+        t_type: TokenType::IntLiteral(channels),
         ..
     }) = tokenizer.get_next()?
     else {
@@ -67,21 +67,15 @@ pub fn get_song<'src, 'name: 'src>(
     };
 
     let Some(Token {
-        t_type: TokenType::FloatLiteral(FloatValue::Double(volume)),
+        t_type: TokenType::FloatLiteral(volume),
         ..
     }) = tokenizer.get_next()?
     else {
         todo!()
     };
 
-    loop {
-        let wave = match tokenizer.get_next()? {
-            Some(Token {
-                t_type: TokenType::Identifier,
-                position,
-            }) => ,
-            _ => todo!(),
-        };
+    while let Some(s) = get_source(&mut tokenizer)? {
+        sources.push(s);
     }
 
     Ok(Song {
@@ -90,4 +84,88 @@ pub fn get_song<'src, 'name: 'src>(
         length,
         name,
     })
+}
+
+fn get_source<S>(
+    tokenizer: &mut Tokenizer<'_, S>,
+) -> Result<Option<gen::Source>, ParserError<S::Error>>
+where
+    S: Source,
+{
+    macro_rules! next {
+        () => {{
+            match tokenizer.get_next()? {
+                Some(t) => t,
+                None => return Ok(None),
+            }
+        }};
+
+        ($p:pat) => {{
+            match tokenizer.get_next()? {
+                Some(t @ $p) => t,
+                _ => return Ok(None),
+            }
+        }};
+
+        ($($p:pat => $e:expr,)+) => {{
+            match tokenizer.get_next()? {
+                $(Some($p) => $e,)+
+                _ => return Ok(None),
+            }
+        }};
+    }
+
+    // let t = next!();
+    // let t = next!(Token {
+    //     t_type: TokenType::Colon,
+    //     ..
+    // });
+    // let t = next! {
+    //     Token {
+    //         t_type: TokenType::FreqLiteral(freq),
+    //         ..
+    //     } => freq,
+
+    //     Token {
+    //         t_type: TokenType::DurationLiteral(d),
+    //         ..
+    //     } => panic!(),
+    // };
+
+    let wave_type = next! {
+        Token {
+            t_type: TokenType::Identifier,
+            position,
+        } => position,
+    }
+    .get_text()
+    .unwrap();
+
+    let freq = next! {
+        Token {
+            t_type: TokenType::FreqLiteral(f),
+            ..
+        } => f,
+    };
+
+    let from = next! {
+        Token {
+            t_type: TokenType::DurationLiteral(d),
+            ..
+        } => d,
+    };
+
+    next!(Token {
+        t_type: TokenType::Colon,
+        ..
+    });
+
+    let to = next! {
+        Token {
+            t_type: TokenType::DurationLiteral(d),
+            ..
+        } => d,
+    };
+
+    todo!()
 }
