@@ -178,10 +178,10 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
         }
 
         let ty = match wave_type {
-            "sine" => gen::SourceType::Sine { freq, phase: 0. },
+            "sin" | "sine" => gen::SourceType::Sine { freq, phase: 0. },
             "saw" => gen::SourceType::Saw { freq, phase: 0. },
             "tri" | "triangle" => gen::SourceType::Triangle { freq, phase: 0. },
-            "sqaure" => gen::SourceType::Square { freq, phase: 0. },
+            "square" => gen::SourceType::Square { freq, phase: 0. },
 
             _ => return Ok(None),
         };
