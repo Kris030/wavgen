@@ -20,7 +20,7 @@ pub fn generate_pcm(song: &mut Song, samplerate: usize, bytes_per_sample: usize)
             let sample = sample.clamp(i16::MIN, i16::MAX);
 
             let data_start = offs + channel * bytes_per_sample;
-            let data_end = offs + (channel + 1) * bytes_per_sample;
+            let data_end = data_start + bytes_per_sample;
             let data_pos = data_start..data_end;
 
             data[data_pos].copy_from_slice(&sample.to_le_bytes());
