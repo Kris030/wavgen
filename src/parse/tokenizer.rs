@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use thiserror::Error as ThisError;
 
 use super::source::{Diagnostic, DiagnosticLevel, Source};
@@ -11,7 +13,7 @@ pub enum TokenType {
     FloatLiteral(f64),
     StringLiteral(String),
     CharLiteral(char),
-    DurationLiteral(f64),
+    DurationLiteral(Duration),
     FreqLiteral(f64),
 
     SingleLineComment,
@@ -98,7 +100,7 @@ pub enum TokenType {
 #[derive(Clone)]
 pub struct Token<'s, S> {
     pub(crate) position: TokenPosition<'s, S>,
-    pub(crate) t_type: TokenType,
+    pub(crate) ty: TokenType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -151,7 +153,10 @@ impl<'s, S> From<&TokenPosition<'s, S>> for std::ops::Range<usize> {
 
 impl<'s, S> Token<'s, S> {
     pub fn new(t_type: TokenType, position: TokenPosition<'s, S>) -> Self {
-        Self { t_type, position }
+        Self {
+            ty: t_type,
+            position,
+        }
     }
 
     pub fn position(&self) -> &TokenPosition<'s, S> {
@@ -159,13 +164,13 @@ impl<'s, S> Token<'s, S> {
     }
 
     pub fn t_type(&self) -> &TokenType {
-        &self.t_type
+        &self.ty
     }
 }
 
 #[derive(Debug)]
-pub struct Tokenizer<'s, S> {
-    diagnostics: Vec<Diagnostic<'s, S>>,
+pub struct Tokenizer<'d, 's, S> {
+    diagnostics: &'d mut Vec<Diagnostic<'s, S>>,
     emit_whitespace: bool,
     buffer: Vec<char>,
     lines: Vec<usize>,
@@ -204,13 +209,13 @@ fn init_keywords() -> std::collections::HashMap<&'static str, TokenType> {
     h
 }
 
-impl<'s, S: Source> Tokenizer<'s, S> {
-    pub fn new(source: S) -> Self {
+impl<'d, 's, S: Source> Tokenizer<'d, 's, S> {
+    pub fn new(source: S, diagnostics: &'d mut Vec<Diagnostic<'s, S>>) -> Self {
         KEYWORDS.get_or_init(init_keywords);
 
         Self {
             emit_whitespace: false,
-            diagnostics: vec![],
+            diagnostics,
             buffer: vec![],
             lines: vec![0],
             column: 0,
@@ -278,7 +283,7 @@ impl<'s, S: Source> Tokenizer<'s, S> {
         } else {
             loop {
                 match self.get_next_with_whitespace()? {
-                    Some(t) if t.t_type == TokenType::Whitespace => continue,
+                    Some(t) if t.ty == TokenType::Whitespace => continue,
                     t => return Ok(t),
                 };
             }
@@ -689,29 +694,35 @@ impl<'s, S: Source> Tokenizer<'s, S> {
         };
 
         match self.get_char()? {
-            Some('s') => Ok(TokenType::DurationLiteral(v)),
+            Some('s') => Ok(TokenType::DurationLiteral(Duration::from_secs_f64(v))),
 
             Some('m') => match self.get_char()? {
-                Some('s') => Ok(TokenType::DurationLiteral(v * 0.0001)),
+                Some('s') => Ok(TokenType::DurationLiteral(Duration::from_secs_f64(
+                    v * 0.0001,
+                ))),
 
                 c => {
                     self.add_buffer(c);
-                    Ok(TokenType::DurationLiteral(v * 1000.))
+                    Ok(TokenType::DurationLiteral(Duration::from_secs_f64(
+                        v * 1000.,
+                    )))
                 }
             },
 
             Some('h') => match self.get_char()? {
-                Some('z') => Ok(TokenType::FreqLiteral(v * 0.0001)),
+                Some('z') => Ok(TokenType::FreqLiteral(v)),
 
                 c => {
                     self.add_buffer(Some('h'));
                     self.add_buffer(c);
-                    Ok(TokenType::DurationLiteral(v * 1000.))
+
+                    Ok(num)
                 }
             },
 
             c => {
                 self.add_buffer(c);
+
                 Ok(num)
             }
         }

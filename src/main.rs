@@ -9,17 +9,16 @@ fn main() -> anyhow::Result<()> {
     let source_file = args.next().unwrap_or_else(|| "test_format.txt".to_string());
     let output_file = args.next().unwrap_or_else(|| "test.wav".to_string());
 
-    let channels = 1;
     let sample_rate = 44100;
     let bytes_per_sample = 2;
 
     let source = std::fs::read_to_string(&source_file)?;
     let mut song = parse::get_song(&source_file, &source)?;
 
-    let data = pcm::generate_pcm(&mut song, channels, sample_rate, bytes_per_sample);
+    let data = pcm::generate_pcm(&mut song, sample_rate, bytes_per_sample);
 
     wav::write_to_wav(
-        channels,
+        song.channels,
         sample_rate,
         bytes_per_sample,
         &data,

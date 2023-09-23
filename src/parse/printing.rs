@@ -22,14 +22,14 @@ impl<'s, S: Source + std::fmt::Debug> std::fmt::Debug for Token<'s, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Token")
             .field("position", &self.position.to_string())
-            .field("type", &self.t_type)
+            .field("type", &self.ty)
             .finish()
     }
 }
 impl<'s, S: Source> std::fmt::Display for Token<'s, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use TokenType::*;
-        match &self.t_type {
+        match &self.ty {
             IntLiteral(v) => write!(f, "{v}"),
             FloatLiteral(v) => write!(f, "{v}"),
 

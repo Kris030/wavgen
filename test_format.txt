@@ -1,8 +1,7 @@
 "My Track 123"
-3s on 1 @ 0.8
+	2s on 1
 
-sine 44hz 0s:1s on * @ 0.75 {
-	fade_in 0s:0.1s
-	fade_out 0.9s:1s
+sine 500hz 0.5s:1s on * @ 0.75 {
+	fade_in 0:0.2
+	fade_out 0.8:1
 }
-	

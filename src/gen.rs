@@ -5,14 +5,14 @@ pub struct Song {
     pub name: String,
 
     pub(crate) channels: usize,
-    pub(crate) length: f64,
+    pub(crate) length_s: f64,
 
     pub(crate) sources: Vec<Source>,
 }
 
 impl Song {
     pub fn length(&self) -> f64 {
-        self.length
+        self.length_s
     }
     pub fn channels(&self) -> usize {
         self.channels
@@ -25,10 +25,28 @@ pub struct Source {
     pub(crate) start: f64,
     pub(crate) end: f64,
     pub(crate) volume: f64,
-    pub(crate) channels: Vec<usize>,
+    pub(crate) channels: Channels,
 
     pub(crate) effects: Vec<Effect>,
 }
+
+#[derive(Debug)]
+pub enum Channels {
+    List(Vec<usize>),
+    One(usize),
+    All,
+}
+
+impl Channels {
+    pub fn has(&self, c: usize) -> bool {
+        match self {
+            Channels::List(l) => l.contains(&c),
+            Channels::One(ch) => c == *ch,
+            Channels::All => true,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum SourceType {
     Sine { freq: f64, phase: f64 },
@@ -65,9 +83,9 @@ impl EffectType {
 
 #[derive(Debug)]
 pub struct Effect {
-    ty: EffectType,
-    start: f64,
-    end: f64,
+    pub(crate) ty: EffectType,
+    pub(crate) start: f64,
+    pub(crate) end: f64,
 }
 
 impl Effect {
@@ -80,11 +98,10 @@ impl Source {
     pub fn gen(&mut self, gi: GenInfo) -> f64 {
         let mut v = self.ty.gen(gi);
 
-        let len = self.length();
         for e in &mut self.effects {
             if (e.start..=e.end).contains(&gi.t) {
-                let si = GenInfo::new(gi, e.start, len);
-                v = e.apply(v, si);
+                let gi_e = GenInfo::new(gi, e.start, e.end);
+                v = e.apply(v, gi_e);
             }
         }
 
@@ -103,28 +120,33 @@ pub struct GenInfo {
 }
 
 impl GenInfo {
-    pub fn new(parent: GenInfo, start: f64, len: f64) -> Self {
+    pub fn new(parent: GenInfo, start: f64, end: f64) -> Self {
         Self {
             channel: parent.channel,
-            t: (parent.t - start) / len,
+            t: (parent.t - start) / (end - start),
         }
     }
 }
 
 pub fn get_sample(s: &mut Song, gi: GenInfo) -> f64 {
-    let values = s.sources.iter_mut().filter_map(|src| {
-        if !((src.start..=src.end).contains(&gi.t) && src.channels.contains(&gi.channel)) {
-            return None;
+    let mut mixed = 0.;
+
+    for src in &mut s.sources {
+        if !src.channels.has(gi.channel) || !(src.start..=src.end).contains(&gi.t) {
+            continue;
         }
 
-        let si = GenInfo::new(gi, src.start, src.length());
+        let gi = GenInfo::new(gi, src.start, src.end);
+        let v = src.gen(gi);
 
-        Some(src.gen(si))
-    });
-
-    let mixed: f64 = values.sum();
+        mixed = mix(mixed, v);
+    }
 
     mixed
+}
+
+pub fn mix(v1: f64, v2: f64) -> f64 {
+    v1 + v2
 }
 
 pub fn lerp(t: f64, s: f64, e: f64) -> f64 {
