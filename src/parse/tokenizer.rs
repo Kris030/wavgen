@@ -1,20 +1,40 @@
-use std::time::Duration;
-
 use thiserror::Error as ThisError;
 
 use super::source::{Diagnostic, DiagnosticLevel, Source};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Number {
+    Real(f64),
+    Integer(i64),
+}
+impl From<Number> for f64 {
+    fn from(value: Number) -> Self {
+        match value {
+            Number::Integer(i) => i as f64,
+            Number::Real(r) => r,
+        }
+    }
+}
+impl From<i64> for Number {
+    fn from(value: i64) -> Self {
+        Self::Integer(value)
+    }
+}
+impl From<f64> for Number {
+    fn from(value: f64) -> Self {
+        Self::Real(value)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Identifier,
     Whitespace,
 
-    IntLiteral(u64),
-    FloatLiteral(f64),
+    NumberLiteral(Number),
+
     StringLiteral(String),
     CharLiteral(char),
-    DurationLiteral(Duration),
-    FreqLiteral(f64),
 
     SingleLineComment,
     MultiLineComment,
@@ -141,7 +161,7 @@ impl<'s, S: Source> TokenPosition<'s, S> {
         self.column
     }
 
-    pub fn get_text(&self) -> Option<&str> {
+    pub fn get_text(&self) -> Option<&'s str> {
         self.source.get_text(self.into())
     }
 }
@@ -302,10 +322,7 @@ impl<'d, 's, S: Source> Tokenizer<'d, 's, S> {
         };
 
         let t_type = match first_char {
-            d @ '0'..='9' => {
-                let num = self.get_num(d)?;
-                self.get_num_like(num)?
-            }
+            d @ '0'..='9' => self.get_num(d)?,
 
             '+' => match self.get_char()? {
                 Some('+') => TokenType::DoublePlus,
@@ -637,7 +654,7 @@ impl<'d, 's, S: Source> Tokenizer<'d, 's, S> {
         let mut int_part = 0;
         let mut x = 1;
         for i in (0..s.len()).rev() {
-            int_part += s[i] as u64 * x;
+            int_part += s[i] as i64 * x;
             x *= 10;
         }
 
@@ -646,14 +663,14 @@ impl<'d, 's, S: Source> Tokenizer<'d, 's, S> {
 
             c => {
                 self.add_buffer(c);
-                Ok(TokenType::IntLiteral(int_part))
+                Ok(TokenType::NumberLiteral(Number::Integer(int_part)))
             }
         }
     }
 
     fn get_float_or_int(
         &mut self,
-        int_part: u64,
+        int_part: i64,
         s: &mut Vec<u8>,
     ) -> Result<TokenType, TokenizerError<S::Error>> {
         s.clear();
@@ -672,7 +689,7 @@ impl<'d, 's, S: Source> Tokenizer<'d, 's, S> {
         if s.is_empty() {
             self.add_buffer(Some('.'));
 
-            return Ok(TokenType::IntLiteral(int_part));
+            return Ok(TokenType::NumberLiteral(Number::Integer(int_part)));
         }
 
         let mut fract = 0.;
@@ -682,50 +699,9 @@ impl<'d, 's, S: Source> Tokenizer<'d, 's, S> {
             fract += *i as f64 * x;
         }
 
-        Ok(TokenType::FloatLiteral(int_part as f64 + fract))
-    }
-
-    fn get_num_like(&mut self, num: TokenType) -> Result<TokenType, TokenizerError<S::Error>> {
-        let v = match num {
-            TokenType::IntLiteral(v) => v as f64,
-            TokenType::FloatLiteral(v) => v,
-
-            _ => unreachable!(),
-        };
-
-        match self.get_char()? {
-            Some('s') => Ok(TokenType::DurationLiteral(Duration::from_secs_f64(v))),
-
-            Some('m') => match self.get_char()? {
-                Some('s') => Ok(TokenType::DurationLiteral(Duration::from_secs_f64(
-                    v * 0.0001,
-                ))),
-
-                c => {
-                    self.add_buffer(c);
-                    Ok(TokenType::DurationLiteral(Duration::from_secs_f64(
-                        v * 1000.,
-                    )))
-                }
-            },
-
-            Some('h') => match self.get_char()? {
-                Some('z') => Ok(TokenType::FreqLiteral(v)),
-
-                c => {
-                    self.add_buffer(Some('h'));
-                    self.add_buffer(c);
-
-                    Ok(num)
-                }
-            },
-
-            c => {
-                self.add_buffer(c);
-
-                Ok(num)
-            }
-        }
+        Ok(TokenType::NumberLiteral(Number::Real(
+            int_part as f64 + fract,
+        )))
     }
 }
 

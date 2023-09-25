@@ -1,3 +1,5 @@
+use crate::parse::tokenizer::Number;
+
 use super::{
     source::Source,
     tokenizer::{Token, TokenPosition, TokenType},
@@ -30,13 +32,13 @@ impl<'s, S: Source> std::fmt::Display for Token<'s, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use TokenType::*;
         match &self.ty {
-            IntLiteral(v) => write!(f, "{v}"),
-            FloatLiteral(v) => write!(f, "{v}"),
+            NumberLiteral(n) => match n {
+                Number::Real(v) => write!(f, "{v}"),
+                Number::Integer(v) => write!(f, "{v}"),
+            },
 
             CharLiteral(v) => write!(f, "'{}'", escape(&v.to_string())),
             StringLiteral(v) => write!(f, "'{}'", escape(v)),
-            DurationLiteral(d) => write!(f, "{d:?}"),
-            FreqLiteral(fq) => write!(f, "{fq}hz"),
 
             Whitespace | Identifier | SingleLineComment | MultiLineComment => {
                 if let Some(t) = self.position.source.get_text((&(self.position)).into()) {

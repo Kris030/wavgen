@@ -1,3 +1,5 @@
+#![feature(try_trait_v2)]
+
 pub mod gen;
 pub mod parse;
 pub mod pcm;

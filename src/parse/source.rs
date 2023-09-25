@@ -1,7 +1,7 @@
 use super::tokenizer::TokenPosition;
 
 pub trait Source: std::fmt::Debug {
-    type Error;
+    type Error: std::error::Error;
 
     fn get_next_char(&mut self) -> Result<Option<char>, Self::Error>;
     fn get_name(&self) -> &str;
@@ -45,9 +45,9 @@ impl<'s, S> Diagnostic<'s, S> {
 }
 
 #[derive(Debug)]
-pub struct StringSource<'a, 'b> {
-    name: &'a str,
-    text: &'b str,
+pub struct StringSource<'name, 'text> {
+    name: &'name str,
+    text: &'text str,
     chars: Vec<char>,
     pos: usize,
 }
@@ -187,7 +187,7 @@ impl Source for StdinSource {
     }
 }
 
-impl<E> Source for &mut dyn Source<Error = E> {
+impl<E: std::error::Error> Source for &mut dyn Source<Error = E> {
     type Error = E;
 
     fn get_next_char(&mut self) -> Result<Option<char>, Self::Error> {
