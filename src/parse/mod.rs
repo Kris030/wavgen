@@ -1,9 +1,9 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, str::FromStr};
 
 use self::{
-    result::ParserResult,
+    result::ParserResult as Res,
     source::{Source, StringSource},
-    tokenizer::{Number, Token, TokenType, Tokenizer},
+    tokenizer::{Number, Token, TokenType as Ty, Tokenizer},
 };
 use crate::gen::{self, Channels, Song};
 use thiserror::Error as ThisError;
@@ -28,29 +28,30 @@ pub enum ParserError<S> {
     TokenizerError(#[from] tokenizer::TokenizerError<S>),
 
     #[error("Unexpected {0:?}")]
-    Unexpected(TokenType),
+    Unexpected(Ty),
 
     #[error("Expected {expected:?}, found {found:?}")]
-    UnexpectedExact {
-        expected: TokenType,
-        found: TokenType,
-    },
+    UnexpectedExact { expected: Ty, found: Ty },
+
+    #[error(transparent)]
+    Expression(#[from] ExpressionError),
 }
+use ParserError as ParsErr;
 
 pub fn get_song<'name, 'text>(
     source_name: &'name str,
     src: &'text str,
-) -> Result<Song, ParserError<<StringSource<'name, 'text> as Source>::Error>> {
+) -> Result<Song, ParsErr<<StringSource<'name, 'text> as Source>::Error>> {
     let mut diagnostics = vec![];
 
     let source = StringSource::new(source_name, src);
     let tokenizer = tokenizer::Tokenizer::new(source, &mut diagnostics);
 
     match Parser::new(tokenizer).parse_song() {
-        ParserResult::Some(t) => Ok(t),
-        ParserResult::Err(_) => unreachable!(),
+        Res::Some(t) => Ok(t),
+        Res::Err(e) => Err(e),
 
-        ParserResult::Done => todo!(),
+        Res::Done => todo!(),
     }
 }
 
@@ -73,36 +74,46 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
         }
     }
 
-    pub fn parse_song<'src, 'name: 'src>(mut self) -> ParserResult<Song, ParserError<S::Error>> {
+    pub fn parse_song<'src, 'name: 'src>(mut self) -> Res<Song, ParsErr<S::Error>> {
+        // println!("parsing expression");
+        // let expr = self.parse_expression()?;
+        // println!("done: {expr:?}");
+        // println!("= {}", expr.evaluate(gen::GenInfo { channel: 0, t: 0. }));
+        // std::process::exit(0);
+
         let mut sources = vec![];
 
-        let Token {
-            ty: TokenType::StringLiteral(name),
-            ..
-        } = self.get_token()?
-        else {
-            return ParserResult::Err(ParserError::MissingName);
+        let name = loop {
+            match self.get_token()? {
+                Token {
+                    ty: Ty::StringLiteral(name),
+                    ..
+                } => break name,
+
+                Token {
+                    ty: Ty::MultiLineComment | Ty::SingleLineComment,
+                    ..
+                } => continue,
+
+                _ => return Res::Err(ParsErr::MissingName),
+            }
         };
 
-        self.song_length_s = match self.get_token()?.ty {
-            TokenType::NumberLiteral(length) => length.into(),
-
-            _ => return ParserResult::Err(ParserError::MissingDuration),
-        };
-
+        // TODO: unwrap
+        self.song_length_s = self.parse_expression()?.evaluate(None).unwrap();
         self.eat_f(match_identifier("s"))?;
 
         self.song_channels = match self.parse_chan()? {
             Channels::One(channels) => channels,
 
-            _ => return ParserResult::Err(ParserError::MissingChannels),
+            _ => return Res::Err(ParsErr::MissingChannels),
         };
 
-        while let ParserResult::Some(s) = self.parse_source() {
+        while let Some(s) = self.parse_source().to_res_opt()? {
             sources.push(s);
         }
 
-        ParserResult::Some(Song {
+        Res::Some(Song {
             channels: self.song_channels,
             length_s: self.song_length_s,
             sources,
@@ -110,69 +121,70 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
         })
     }
 
-    fn get_token(&mut self) -> ParserResult<Token<'s, S>, ParserError<S::Error>> {
+    fn get_token(&mut self) -> Res<Token<'s, S>, ParsErr<S::Error>> {
         if let Some(t) = self.buffer.pop() {
-            return ParserResult::Some(t);
+            return Res::Some(t);
         }
 
         match self.tokenizer.get_next() {
-            Ok(Some(v)) => ParserResult::Some(v),
-            Ok(None) => ParserResult::Done,
+            Ok(Some(v)) => Res::Some(v),
+            Ok(None) => Res::Done,
 
-            Err(e) => ParserResult::Err(ParserError::TokenizerError(e)),
+            Err(e) => Res::Err(ParsErr::TokenizerError(e)),
         }
     }
 
-    fn eat(&mut self, expected: TokenType) -> ParserResult<Token<'s, S>, ParserError<S::Error>> {
+    fn eat(&mut self, expected: Ty) -> Res<Token<'s, S>, ParsErr<S::Error>> {
         let token = self.get_token()?;
 
         if token.ty == expected {
-            ParserResult::Some(token)
+            Res::Some(token)
         } else {
             let found = token.ty.clone();
 
             self.buffer.push(token);
 
-            ParserResult::Err(ParserError::UnexpectedExact { expected, found })
+            Res::Err(ParsErr::UnexpectedExact { expected, found })
         }
     }
 
-    fn eat_f<F>(&mut self, f: F) -> ParserResult<Token<'s, S>, ParserError<S::Error>>
+    fn eat_f<F>(&mut self, f: F) -> Res<Token<'s, S>, ParsErr<S::Error>>
     where
         F: FnOnce(&Token<'s, S>) -> bool,
     {
         let token = self.get_token()?;
 
         if f(&token) {
-            ParserResult::Some(token)
+            Res::Some(token)
         } else {
             let ty = token.ty.clone();
             self.buffer.push(token);
-            ParserResult::Err(ParserError::Unexpected(ty))
+            Res::Err(ParsErr::Unexpected(ty))
         }
     }
 
-    fn parse_source(&mut self) -> ParserResult<gen::Source, ParserError<S::Error>> {
-        let wave_type_t = self.eat(TokenType::Identifier)?;
+    fn parse_source(&mut self) -> Res<gen::Source, ParsErr<S::Error>> {
+        let wave_type_t = self.eat(Ty::Identifier)?;
 
         let wave_type = wave_type_t
             .position
             .get_text()
             .expect("Couldn't get identifier contents");
 
-        self.eat(TokenType::LeftParenthesis)?;
+        self.eat(Ty::LeftParenthesis)?;
 
-        let freq = match self.get_token()?.ty {
-            TokenType::NumberLiteral(n) => n.into(),
-            ty => return ParserResult::Err(ParserError::Unexpected(ty)),
-        };
-
+        let freq = self.parse_expression()?;
+        // match self.get_token()?.ty {
+        //     Ty::NumberLiteral(n) => n.into(),
+        //     ty => return Res::Err(ParsErr::Unexpected(ty)),
+        // };
         self.eat_f(match_identifier("hz"))?;
-        self.eat(TokenType::Comma)?;
+
+        self.eat(Ty::Comma)?;
 
         let (start, end) = self.parse_timeframe(self.song_length_s)?;
 
-        self.eat(TokenType::RightParenthesis)?;
+        self.eat(Ty::RightParenthesis)?;
 
         let channels = self.parse_chan()?;
         let volume = self.parse_vol()?;
@@ -180,24 +192,36 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
         let mut effects = vec![];
 
         let len_s = (end - start) * self.song_length_s;
-        if let ParserResult::Some(_) = self.eat(TokenType::LeftCurlyBraces) {
-            while let ParserResult::Some(e) = self.parse_effect(len_s) {
+        if let Res::Some(_) = self.eat(Ty::LeftCurlyBraces) {
+            while let Res::Some(e) = self.parse_effect(len_s) {
                 effects.push(e);
             }
 
-            self.eat(TokenType::RightCurlyBraces)?;
+            self.eat(Ty::RightCurlyBraces)?;
         }
 
         let ty = match wave_type {
-            "sin" | "sine" => gen::SourceType::Sine { freq, phase: 0. },
-            "saw" => gen::SourceType::Saw { freq, phase: 0. },
-            "tri" | "triangle" => gen::SourceType::Triangle { freq, phase: 0. },
-            "square" => gen::SourceType::Square { freq, phase: 0. },
+            "sin" | "sine" => gen::SourceType::Sine {
+                freq,
+                phase: Expression::Lit(Number::Real(0.)),
+            },
+            "saw" => gen::SourceType::Saw {
+                freq,
+                phase: Expression::Lit(Number::Real(0.)),
+            },
+            "tri" | "triangle" => gen::SourceType::Triangle {
+                freq,
+                phase: Expression::Lit(Number::Real(0.)),
+            },
+            "square" => gen::SourceType::Square {
+                freq,
+                phase: Expression::Lit(Number::Real(0.)),
+            },
 
-            _ => return ParserResult::Err(ParserError::Unexpected(wave_type_t.ty)),
+            _ => return Res::Err(ParsErr::Unexpected(wave_type_t.ty)),
         };
 
-        ParserResult::Some(gen::Source {
+        Res::Some(gen::Source {
             start,
             end,
 
@@ -210,11 +234,8 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
         })
     }
 
-    fn parse_effect(
-        &mut self,
-        parent_len_s: f64,
-    ) -> ParserResult<gen::Effect, ParserError<S::Error>> {
-        let name_t = self.eat(TokenType::Identifier)?;
+    fn parse_effect(&mut self, parent_len_s: f64) -> Res<gen::Effect, ParsErr<S::Error>> {
+        let name_t = self.eat(Ty::Identifier)?;
         let name = name_t
             .position
             .get_text()
@@ -226,41 +247,40 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
             "fade_in" => gen::EffectType::FadeIn,
             "fade_out" => gen::EffectType::FadeOut,
 
-            _ => return ParserResult::Err(ParserError::Unexpected(name_t.ty)),
+            _ => return Res::Err(ParsErr::Unexpected(name_t.ty)),
         };
 
-        ParserResult::Some(gen::Effect { ty, start, end })
+        Res::Some(gen::Effect { ty, start, end })
     }
 
-    fn parse_chan(&mut self) -> ParserResult<Channels, ParserError<S::Error>> {
-        self.eat(TokenType::OnKw)?;
+    fn parse_chan(&mut self) -> Res<Channels, ParsErr<S::Error>> {
+        self.eat(Ty::OnKw)?;
 
         match self.get_token()?.ty {
-            TokenType::NumberLiteral(Number::Integer(i)) => {
-                ParserResult::Some(Channels::One(i as usize))
-            }
+            Ty::NumberLiteral(Number::Integer(i)) => Res::Some(Channels::One(i as usize)),
 
-            TokenType::Star => ParserResult::Some(Channels::All),
+            Ty::Star => Res::Some(Channels::All),
 
-            ty => ParserResult::Err(ParserError::Unexpected(ty)),
+            ty => Res::Err(ParsErr::Unexpected(ty)),
         }
     }
 
-    fn parse_vol(&mut self) -> ParserResult<f64, ParserError<S::Error>> {
-        self.eat(TokenType::AtSign)?;
+    fn parse_vol(&mut self) -> Res<Expression, ParsErr<S::Error>> {
+        self.eat(Ty::AtSign)?;
 
-        match self.get_token()?.ty {
-            TokenType::NumberLiteral(n) => ParserResult::Some(n.into()),
+        // match self.get_token()?.ty {
+        //     Ty::NumberLiteral(n) => Res::Some(n.into()),
 
-            ty => ParserResult::Err(ParserError::Unexpected(ty)),
-        }
+        //     ty => Res::Err(ParsErr::Unexpected(ty)),
+        // }
+        self.parse_expression()
     }
 
-    fn parse_time_unit(&mut self) -> ParserResult<f64, ParserError<S::Error>> {
-        let t = self.eat(TokenType::Identifier)?;
+    fn parse_time_unit(&mut self) -> Res<f64, ParsErr<S::Error>> {
+        let t = self.eat(Ty::Identifier)?;
         let txt = t.position.get_text().unwrap();
 
-        ParserResult::Some(match txt {
+        Res::Some(match txt {
             "h" => 3600.,
             "m" => 60.,
 
@@ -272,49 +292,46 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
             _ => {
                 let ty = t.ty.clone();
                 self.buffer.push(t);
-                return ParserResult::Err(ParserError::Unexpected(ty));
+                return Res::Err(ParsErr::Unexpected(ty));
             }
         })
     }
 
-    fn parse_timeframe(
-        &mut self,
-        parent_len_s: f64,
-    ) -> ParserResult<(f64, f64), ParserError<S::Error>> {
+    fn parse_timeframe(&mut self, parent_len_s: f64) -> Res<(f64, f64), ParsErr<S::Error>> {
         let t = self.get_token()?;
 
         let mut need_colon = true;
         let start = match t.ty {
-            TokenType::NumberLiteral(n) => {
+            Ty::NumberLiteral(n) => {
                 let mut n: f64 = n.into();
 
-                if let ParserResult::Some(u) = self.parse_time_unit() {
+                if let Res::Some(u) = self.parse_time_unit() {
                     n = (n * u) / parent_len_s;
                 }
 
                 n
             }
 
-            TokenType::Colon => {
+            Ty::Colon => {
                 need_colon = false;
                 0.
             }
 
-            ty => return ParserResult::Err(ParserError::Unexpected(ty)),
+            ty => return Res::Err(ParsErr::Unexpected(ty)),
         };
 
         if need_colon {
-            self.eat(TokenType::Colon)?;
+            self.eat(Ty::Colon)?;
         }
 
         let end = match self.get_token().to_res_opt()? {
             Some(Token {
-                ty: TokenType::NumberLiteral(n),
+                ty: Ty::NumberLiteral(n),
                 ..
             }) => {
                 let mut n: f64 = n.into();
 
-                if let ParserResult::Some(u) = self.parse_time_unit() {
+                if let Res::Some(u) = self.parse_time_unit() {
                     n = (n * u) / parent_len_s;
                 }
 
@@ -330,21 +347,18 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
             }
         };
 
-        ParserResult::Some((start, end))
+        Res::Some((start, end))
     }
 
-    fn parse_expression(&mut self) -> ParserResult<Expression, ParserError<S::Error>> {
+    fn parse_expression(&mut self) -> Res<Expression, ParsErr<S::Error>> {
         let mut output_queue = vec![];
         let mut ops = vec![];
 
         let prec = |t: &Token<'s, S>| match t.ty {
-            TokenType::DoubleStar => 3,
-            TokenType::Slash => 2,
-            TokenType::Star => 2,
-            TokenType::Percent => 2,
-            TokenType::Plus => 1,
-            TokenType::Minus => 1,
-            TokenType::LeftParenthesis => 0,
+            Ty::LeftParenthesis => 0,
+            Ty::Plus | Ty::Minus => 1,
+            Ty::Slash | Ty::Star | Ty::Percent => 2,
+            Ty::Caret => 3,
 
             _ => unreachable!(),
         };
@@ -356,130 +370,120 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
             NonAssoc,
         }
         let assoc = |t: &Token<'s, S>| match t.ty {
-            TokenType::LeftParenthesis | TokenType::RightParenthesis => Assoc::NonAssoc,
-            TokenType::DoubleStar => Assoc::Right,
+            Ty::LeftParenthesis | Ty::RightParenthesis => Assoc::NonAssoc,
+            Ty::Caret => Assoc::Right,
 
-            TokenType::NumberLiteral(_) => panic!("operator assoc called on an integer."),
+            Ty::Slash | Ty::Star | Ty::Percent | Ty::Plus | Ty::Minus => Assoc::Left,
 
-            _ => Assoc::Left,
+            _ => panic!("operator assoc called on non operator."),
         };
+
+        // shunting yard algorithm
+        // from https://en.wikipedia.org/wiki/Shunting_yard_algorithm#The_algorithm_in_detail
 
         // while there are tokens to be read:
         //     read a token
-        while let ParserResult::Some(t) = self.get_token() {
+        while let Res::Some(t) = self.get_token() {
             match t.ty {
                 // if the token is:
                 // - a number:
                 //     put it into the output queue
-                TokenType::NumberLiteral(_) => output_queue.push(t),
+                Ty::NumberLiteral(_) => output_queue.push(t),
 
                 // - a function:
                 //  push it onto the operator stack
-                TokenType::Identifier => match t.position.get_text().unwrap() {
-                    f @ ("sin" | "cos" | "tan" | "ln" | "lg" | "log10" | "log2" | "sqrt"
-                    | "abs" | "round" | "floor" | "ceil" | "rad" | "deg") => ops.push(t),
-
-                    s => output_queue.push(t),
-                },
+                Ty::Identifier => {
+                    if MathFunc::is_func(t.position.get_text().unwrap()) {
+                        ops.push(t);
+                    } else {
+                        output_queue.push(t);
+                    }
+                }
 
                 // - an operator o1:
-                TokenType::Plus
-                | TokenType::Minus
-                | TokenType::Star
-                | TokenType::Slash
-                | TokenType::Caret
-                | TokenType::LeftParenthesis => {
+                Ty::Plus | Ty::Minus | Ty::Star | Ty::Slash | Ty::Caret | Ty::Percent => {
                     // while (
                     //     there is an operator o2 at the top of the operator stack which is not a left parenthesis,
                     //     and (o2 has greater precedence than o1 or (o1 and o2 have the same precedence and o1 is left-associative))
                     // ):
-                    while ops
-                        .last()
-                        .map_or(false, |op| op.ty != TokenType::LeftParenthesis)
-                        && (prec(ops.last().unwrap()) > prec(&t)
-                            || (prec(&t) == prec(ops.last().unwrap()) && assoc(&t) == Assoc::Left))
-                    {
+                    while 'w: {
+                        let Some(o2) = ops.last() else {
+                            break 'w false;
+                        };
+
+                        if o2.ty != Ty::LeftParenthesis {
+                            break 'w false;
+                        }
+
+                        (prec(o2) > prec(&t)) || (prec(&t) == prec(o2) && assoc(&t) == Assoc::Left)
+                    } {
                         // pop o2 from the operator stack into the output queue
                         output_queue.push(ops.pop().unwrap());
                     }
+
                     // push o1 onto the operator stack
                     ops.push(t);
                 }
 
                 // - a ",":
-                TokenType::Comma => {
+                Ty::Comma => {
                     // while the operator at the top of the operator stack is not a left parenthesis:
-                    while ops
-                        .last()
-                        .map_or(false, |op| op.ty != TokenType::LeftParenthesis)
-                    {
+                    while {
+                        if let Some(o2) = ops.last() {
+                            o2.ty != Ty::LeftParenthesis
+                        } else {
+                            false
+                        }
+                    } {
                         // pop the operator from the operator stack into the output queue
                         output_queue.push(ops.pop().unwrap());
                     }
                 }
 
                 // - a left parenthesis (i.e. "("):
-                TokenType::LeftParenthesis => {
-                    // push it onto the operator stack
-                    ops.push(t);
-                }
+                // push it onto the operator stack
+                Ty::LeftParenthesis => ops.push(t),
 
                 // - a right parenthesis (i.e. ")"):
-                TokenType::RightParenthesis => {
+                Ty::RightParenthesis => {
                     // while the operator at the top of the operator stack is not a left parenthesis:
+                    while 'w: {
+                        let Some(o2) = ops.last() else {
+                            break 'w false;
+                        };
 
-                    while ops
-                        .last()
-                        .map_or(false, |op| op.ty != TokenType::LeftParenthesis)
-                    {
+                        o2.ty != Ty::LeftParenthesis
+                    } {
                         // {assert the operator stack is not empty}
                         // /* If the stack runs out without finding a left parenthesis, then there are mismatched parentheses. */
                         if ops.is_empty() {
-                            todo!()
+                            todo!("mismatched parentheses")
                         }
 
                         // pop the operator from the operator stack into the output queue
                         output_queue.push(ops.pop().unwrap());
+                    }
 
-                        // {assert there is a left parenthesis at the top of the operator stack}
-                        // pop the left parenthesis from the operator stack and discard it
-                        if let Some(Token {
-                            ty: TokenType::LeftParenthesis,
-                            ..
-                        }) = ops.pop()
-                        {
-                            // do nothing?
-                        } else {
-                            todo!()
-                        }
+                    // {assert there is a left parenthesis at the top of the operator stack}
+                    // pop the left parenthesis from the operator stack and discard it
+                    if !matches!(ops.pop().map(|t| t.ty), Some(Ty::LeftParenthesis)) {
+                        todo!()
+                    }
 
-                        // if there is a function token at the top of the operator stack, then:
-                        if !ops.is_empty()
-                            && ops.last().unwrap().ty == TokenType::Identifier
-                            && matches!(
-                                t.position.get_text().unwrap(),
-                                "sin"
-                                    | "cos"
-                                    | "tan"
-                                    | "ln"
-                                    | "lg"
-                                    | "log10"
-                                    | "log2"
-                                    | "sqrt"
-                                    | "abs"
-                                    | "round"
-                                    | "floor"
-                                    | "ceil"
-                                    | "rad"
-                                    | "deg"
-                            )
-                        {
-                            // pop the function from the operator stack into the output queue
-                            output_queue.push(ops.pop().unwrap());
-                        }
+                    // if there is a function token at the top of the operator stack, then:
+                    if !ops.is_empty()
+                        && ops.last().unwrap().ty == Ty::Identifier
+                        && MathFunc::is_func(t.position.get_text().unwrap())
+                    {
+                        // pop the function from the operator stack into the output queue
+                        output_queue.push(ops.pop().unwrap());
                     }
                 }
-                _ => todo!(),
+
+                _ => {
+                    self.buffer.push(t);
+                    break;
+                }
             }
         }
 
@@ -489,14 +493,23 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
             // /* If the operator token on the top of the stack is a parenthesis, then there are mismatched parentheses. */
             //     {assert the operator on top of the stack is not a (left) parenthesis}
             //     pop the operator from the operator stack onto the output queue
-            if t.ty == TokenType::LeftParenthesis {
-                todo!()
+            if t.ty == Ty::LeftParenthesis {
+                todo!("mismatched parenthesis")
             }
 
             output_queue.push(t);
         }
 
-        todo!()
+        println!(
+            "{:?}",
+            output_queue.iter().map(|t| &t.ty).collect::<Vec<_>>()
+        );
+
+        let expr = Expression::construct(&mut output_queue);
+
+        self.buffer.append(&mut output_queue);
+
+        Res::Some(expr)
     }
 }
 
@@ -504,7 +517,7 @@ fn match_identifier<'name, 's, S: Source>(
     name: &'name str,
 ) -> impl 'name + FnOnce(&Token<'s, S>) -> bool {
     move |t| match t.ty {
-        TokenType::Identifier => match t.position.get_text() {
+        Ty::Identifier => match t.position.get_text() {
             Some(t) => t == name,
             None => false,
         },
@@ -513,6 +526,7 @@ fn match_identifier<'name, 's, S: Source>(
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum Expression {
     Add(Box<Expression>, Box<Expression>),
     Sub(Box<Expression>, Box<Expression>),
@@ -523,64 +537,160 @@ pub enum Expression {
     Pow(Box<Expression>, Box<Expression>),
     Mod(Box<Expression>, Box<Expression>),
 
-    Call(String, Box<Expression>),
+    Call(MathFunc, Box<Expression>),
 
     VarOrConst(String),
     Lit(Number),
 }
 
+#[derive(Debug, ThisError)]
+pub enum ExpressionError {
+    #[error("Unknown variable {0}")]
+    UnknownVar(String),
+
+    #[error("No GenInfo")]
+    NoGenInfo,
+}
+
 impl Expression {
-    pub fn evaluate(&self, gi: gen::GenInfo) -> f64 {
-        match self {
-            Self::Add(a, b) => a.evaluate(gi) + b.evaluate(gi),
-            Self::Sub(a, b) => a.evaluate(gi) - b.evaluate(gi),
+    pub fn evaluate(&self, gi: Option<gen::GenInfo>) -> Result<f64, ExpressionError> {
+        Ok(match self {
+            Self::Add(b, a) => a.evaluate(gi)? + b.evaluate(gi)?,
+            Self::Sub(b, a) => a.evaluate(gi)? - b.evaluate(gi)?,
 
-            Self::Mul(a, b) => a.evaluate(gi) * b.evaluate(gi),
-            Self::Div(a, b) => a.evaluate(gi) / b.evaluate(gi),
+            Self::Mul(b, a) => a.evaluate(gi)? * b.evaluate(gi)?,
+            Self::Div(b, a) => a.evaluate(gi)? / b.evaluate(gi)?,
 
-            Self::Mod(a, b) => a.evaluate(gi) % b.evaluate(gi),
+            Self::Mod(b, a) => a.evaluate(gi)? % b.evaluate(gi)?,
 
-            Self::Pow(a, b) => a.evaluate(gi).powf(b.evaluate(gi)),
+            Self::Pow(b, a) => a.evaluate(gi)?.powf(b.evaluate(gi)?),
 
-            Self::Call(name, arg) => {
-                let arg = arg.evaluate(gi);
-                match &name[..] {
-                    "sin" => f64::sin(arg),
-                    "cos" => f64::cos(arg),
-                    "tan" => f64::tan(arg),
-
-                    "ln" => f64::ln(arg),
-                    "lg" | "log10" => f64::log10(arg),
-                    "log2" => f64::log2(arg),
-
-                    "sqrt" => f64::sqrt(arg),
-
-                    "abs" => f64::abs(arg),
-                    "round" => f64::round(arg),
-                    "floor" => f64::floor(arg),
-                    "ceil" => f64::ceil(arg),
-                    "rad" => f64::to_radians(arg),
-                    "deg" => f64::to_degrees(arg),
-
-                    _var => {
-                        todo!()
-                    }
-                }
-            }
+            Self::Call(f, arg) => f.call(arg.evaluate(gi)?),
 
             Self::VarOrConst(name) => match &name[..] {
                 "pi" | "π" => std::f64::consts::PI,
                 "e" => std::f64::consts::E,
 
-                "channel" => gi.channel as f64,
-                "t" => gi.t,
+                "channel" | "ch" => gi.ok_or(ExpressionError::NoGenInfo)?.channel as f64,
+                "t" => gi.ok_or(ExpressionError::NoGenInfo)?.t,
 
-                _var => {
-                    todo!()
-                }
+                v => return Err(ExpressionError::UnknownVar(v.to_string())),
             },
 
-            &Self::Lit(a) => a.into(),
+            Self::Lit(a) => (*a).into(),
+        })
+    }
+
+    fn construct<'s, S: Source + 's>(iter: &mut Vec<Token<'s, S>>) -> Self {
+        let t = iter.pop().unwrap();
+
+        match t.ty {
+            Ty::NumberLiteral(n) => Self::Lit(n),
+
+            Ty::Identifier => {
+                let s = t.position.get_text().unwrap();
+                if let Ok(f) = MathFunc::from_str(s) {
+                    Self::Call(f, Box::new(Self::construct(iter)))
+                } else {
+                    Self::VarOrConst(s.to_string())
+                }
+            }
+
+            Ty::Plus => Self::Add(
+                Box::new(Self::construct(iter)),
+                Box::new(Self::construct(iter)),
+            ),
+            Ty::Minus => Self::Sub(
+                Box::new(Self::construct(iter)),
+                Box::new(Self::construct(iter)),
+            ),
+            Ty::Star => Self::Mul(
+                Box::new(Self::construct(iter)),
+                Box::new(Self::construct(iter)),
+            ),
+            Ty::Slash => Self::Sub(
+                Box::new(Self::construct(iter)),
+                Box::new(Self::construct(iter)),
+            ),
+            Ty::Caret => Self::Pow(
+                Box::new(Self::construct(iter)),
+                Box::new(Self::construct(iter)),
+            ),
+            Ty::Percent => Self::Mod(
+                Box::new(Self::construct(iter)),
+                Box::new(Self::construct(iter)),
+            ),
+
+            Ty::Comma => todo!(),
+
+            Ty::RightParenthesis | Ty::LeftParenthesis => Self::construct(iter),
+
+            _ => unreachable!(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathFunc {
+    Sin,
+    Cos,
+    Tan,
+    Ln,
+    Log10,
+    Log2,
+    Sqrt,
+    Abs,
+    Round,
+    Floor,
+    Ceil,
+    Rad,
+    Deg,
+}
+
+impl MathFunc {
+    pub fn call(&self, x: f64) -> f64 {
+        match self {
+            Self::Sin => x.sin(),
+            Self::Cos => x.cos(),
+            Self::Tan => x.tan(),
+            Self::Ln => x.ln(),
+            Self::Log10 => x.log10(),
+            Self::Log2 => x.log2(),
+            Self::Sqrt => x.sqrt(),
+            Self::Abs => x.abs(),
+            Self::Round => x.round(),
+            Self::Floor => x.floor(),
+            Self::Ceil => x.ceil(),
+            Self::Rad => x.to_radians(),
+            Self::Deg => x.to_degrees(),
+        }
+    }
+
+    pub fn is_func(s: &str) -> bool {
+        Self::from_str(s).is_ok()
+    }
+}
+
+impl FromStr for MathFunc {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "sin" => MathFunc::Sin,
+            "cos" => MathFunc::Cos,
+            "tan" => MathFunc::Tan,
+            "ln" => MathFunc::Ln,
+            "lg" | "log10" => MathFunc::Log10,
+            "log2" => MathFunc::Log2,
+            "sqrt" => MathFunc::Sqrt,
+            "abs" => MathFunc::Abs,
+            "round" => MathFunc::Round,
+            "floor" => MathFunc::Floor,
+            "ceil" => MathFunc::Ceil,
+            "rad" => MathFunc::Rad,
+            "deg" => MathFunc::Deg,
+
+            _ => return Err(()),
+        })
     }
 }

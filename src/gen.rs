@@ -1,5 +1,7 @@
 use std::f64::consts::{PI, TAU};
 
+use crate::parse::{Expression, ExpressionError};
+
 #[derive(Debug)]
 pub struct Song {
     pub name: String,
@@ -24,7 +26,7 @@ pub struct Source {
     pub(crate) ty: SourceType,
     pub(crate) start: f64,
     pub(crate) end: f64,
-    pub(crate) volume: f64,
+    pub(crate) volume: Expression,
     pub(crate) channels: Channels,
 
     pub(crate) effects: Vec<Effect>,
@@ -40,29 +42,32 @@ pub enum Channels {
 impl Channels {
     pub fn has(&self, c: usize) -> bool {
         match self {
-            Channels::List(l) => l.contains(&c),
-            Channels::One(ch) => c == *ch,
-            Channels::All => true,
+            Self::List(l) => l.contains(&c),
+            Self::One(ch) => c == *ch,
+            Self::All => true,
         }
     }
 }
 
 #[derive(Debug)]
 pub enum SourceType {
-    Sine { freq: f64, phase: f64 },
-    Saw { freq: f64, phase: f64 },
-    Square { freq: f64, phase: f64 },
-    Triangle { freq: f64, phase: f64 },
+    Sine { freq: Expression, phase: Expression },
+    Saw { freq: Expression, phase: Expression },
+    Square { freq: Expression, phase: Expression },
+    Triangle { freq: Expression, phase: Expression },
 }
 
 impl SourceType {
-    pub fn gen(&mut self, gi: GenInfo) -> f64 {
-        match *self {
-            SourceType::Sine { freq, phase } => sine(gi.t, freq, phase),
-            SourceType::Saw { freq, phase } => saw(gi.t, freq, phase),
-            SourceType::Square { freq, phase } => square(gi.t, freq, phase),
-            SourceType::Triangle { freq, phase } => triangle(gi.t, freq, phase),
-        }
+    pub fn gen(&mut self, gi: GenInfo) -> Result<f64, ExpressionError> {
+        let t = gi.t;
+        let gi = Some(gi);
+
+        Ok(match self {
+            Self::Sine { freq, phase } => sine(t, freq.evaluate(gi)?, phase.evaluate(gi)?),
+            Self::Saw { freq, phase } => saw(t, freq.evaluate(gi)?, phase.evaluate(gi)?),
+            Self::Square { freq, phase } => square(t, freq.evaluate(gi)?, phase.evaluate(gi)?),
+            Self::Triangle { freq, phase } => triangle(t, freq.evaluate(gi)?, phase.evaluate(gi)?),
+        })
     }
 }
 
@@ -75,8 +80,8 @@ pub enum EffectType {
 impl EffectType {
     pub fn apply(&mut self, v: f64, gi: GenInfo) -> f64 {
         match *self {
-            EffectType::FadeIn => v * gi.t,
-            EffectType::FadeOut => v * (1. - gi.t),
+            Self::FadeIn => v * gi.t,
+            Self::FadeOut => v * (1. - gi.t),
         }
     }
 }
@@ -95,8 +100,8 @@ impl Effect {
 }
 
 impl Source {
-    pub fn gen(&mut self, gi: GenInfo) -> f64 {
-        let mut v = self.ty.gen(gi);
+    pub fn gen(&mut self, gi: GenInfo) -> Result<f64, ExpressionError> {
+        let mut v = self.ty.gen(gi)?;
 
         for e in &mut self.effects {
             if (e.start..=e.end).contains(&gi.t) {
@@ -105,7 +110,7 @@ impl Source {
             }
         }
 
-        v * self.volume
+        Ok(v * self.volume.evaluate(Some(gi))?)
     }
 
     pub fn length(&self) -> f64 {
@@ -128,7 +133,7 @@ impl GenInfo {
     }
 }
 
-pub fn get_sample(s: &mut Song, gi: GenInfo) -> f64 {
+pub fn get_sample(s: &mut Song, gi: GenInfo) -> Result<f64, ExpressionError> {
     let mut mixed = 0.;
 
     for src in &mut s.sources {
@@ -137,12 +142,12 @@ pub fn get_sample(s: &mut Song, gi: GenInfo) -> f64 {
         }
 
         let gi = GenInfo::new(gi, src.start, src.end);
-        let v = src.gen(gi);
+        let v = src.gen(gi)?;
 
         mixed = mix(mixed, v);
     }
 
-    mixed
+    Ok(mixed)
 }
 
 pub fn mix(v1: f64, v2: f64) -> f64 {

@@ -17,7 +17,9 @@ fn main() -> anyhow::Result<()> {
     let source = std::fs::read_to_string(&source_file)?;
     let mut song = parse::get_song(&source_file, &source)?;
 
-    let data = pcm::generate_pcm(&mut song, sample_rate, bytes_per_sample);
+    println!("song: {song:?}");
+
+    let data = pcm::generate_pcm(&mut song, sample_rate, bytes_per_sample)?;
 
     wav::write_to_wav(
         song.channels,

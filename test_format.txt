@@ -1,5 +1,7 @@
+// 1 + (pi - 3) ^ 3
+
 "My Track 123"
-	2s on 1
+	2 + 3  on 1
 
 tri(60hz, :1s) on * @ 0.5 {
 	fade_in :0.2

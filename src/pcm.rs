@@ -1,6 +1,13 @@
-use crate::gen::{self, GenInfo, Song};
+use crate::{
+    gen::{self, GenInfo, Song},
+    parse::ExpressionError,
+};
 
-pub fn generate_pcm(song: &mut Song, samplerate: usize, bytes_per_sample: usize) -> Vec<u8> {
+pub fn generate_pcm(
+    song: &mut Song,
+    samplerate: usize,
+    bytes_per_sample: usize,
+) -> Result<Vec<u8>, ExpressionError> {
     let samples = (samplerate as f64 * song.length_s) as usize;
 
     let mut data = vec![0; samples * song.channels * bytes_per_sample];
@@ -14,10 +21,8 @@ pub fn generate_pcm(song: &mut Song, samplerate: usize, bytes_per_sample: usize)
                 t: t / song.length_s,
             };
 
-            let sample = gen::get_sample(song, gi);
-
-            let sample = (sample * i16::MAX as f64).round() as i16;
-            let sample = sample.clamp(i16::MIN, i16::MAX);
+            let sample = gen::get_sample(song, gi)?;
+            let sample = (sample * i16::MAX as f64) as i16;
 
             let data_start = offs + channel * bytes_per_sample;
             let data_end = data_start + bytes_per_sample;
@@ -27,5 +32,5 @@ pub fn generate_pcm(song: &mut Song, samplerate: usize, bytes_per_sample: usize)
         }
     }
 
-    data
+    Ok(data)
 }
