@@ -3,7 +3,7 @@
 "My Track 123"
 	1 + 1s on 1
 
-tri((1 - t) * 60hz, :1s) on * @ 1 - t {
+tri((1 - t) * 60hz, :1s) on * @ 0.25 + 0.75 * (1 - t) {
 	fade_in :0.025
 	// fade_out 0.8:
 }

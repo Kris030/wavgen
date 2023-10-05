@@ -1,6 +1,7 @@
 #!/bin/env python3
 from matplotlib.widgets import Slider
 import matplotlib.pyplot as plt
+from watchfiles import watch
 import numpy as np
 import argparse
 import wave
@@ -10,18 +11,21 @@ parser = argparse.ArgumentParser(description='Plot da wave')
 parser.add_argument('input_file', help='the wav file ya retard')
 args = parser.parse_args()
 
-spf = wave.open(args.input_file, 'r')
+def f():
+	print("f")
+	spf = wave.open(args.input_file, 'r')
 
-# Extract Raw Audio from Wav File
-signal = spf.readframes(-1)
-signal = np.frombuffer(signal, dtype=np.int16)
+	# Extract Raw Audio from Wav File
+	signal = spf.readframes(-1)
+	signal = np.frombuffer(signal, dtype=np.int16)
 
-# If Stereo
-if spf.getnchannels() != 1:
-    print('Just mono files')
-    sys.exit(0)
+	# If Stereo
+	if spf.getnchannels() != 1:
+		print('Just mono files')
+		sys.exit(0)
 
-to_plot = signal / 0x7FFF
+	return signal / 0x7FFF
+to_plot = f()
 
 fig, ax = plt.subplots()
 
@@ -63,5 +67,18 @@ spos.on_changed(update)
 zoom.on_changed(update)
 
 fig.canvas.manager.set_window_title('Wave')
+plt.show(block=False)
 
-plt.show()
+for changes in watch(args.input_file, rust_timeout=200, yield_on_timeout=True):
+	if not plt.fignum_exists(1):
+		break
+
+	# plt.pause(0.1)
+	if len(changes) != 0:
+		to_plot = f()
+
+		fig.clear()
+		plt.plot(to_plot)
+
+	fig.canvas.draw_idle()
+	fig.canvas.start_event_loop(0.3)
