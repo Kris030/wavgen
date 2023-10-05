@@ -1,11 +1,14 @@
-use std::{fmt::Debug, str::FromStr};
+use std::{
+    fmt::{Debug, Display},
+    str::FromStr,
+};
 
 use self::{
     result::ParserResult as Res,
     source::{Source, StringSource},
     tokenizer::{Number, Token, TokenType as Ty, Tokenizer},
 };
-use crate::gen::{self, Channels, Song};
+use crate::gen::{self, Channels, PeriodicSource, Song, SourceType};
 use thiserror::Error as ThisError;
 
 pub mod printing;
@@ -75,33 +78,30 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
     }
 
     pub fn parse_song<'src, 'name: 'src>(mut self) -> Res<Song, ParsErr<S::Error>> {
-        // println!("parsing expression");
-        // let expr = self.parse_expression()?;
-        // println!("done: {expr:?}");
-        // println!("= {}", expr.evaluate(gen::GenInfo { channel: 0, t: 0. }));
-        // std::process::exit(0);
-
         let mut sources = vec![];
 
-        let name = loop {
-            match self.get_token()? {
-                Token {
-                    ty: Ty::StringLiteral(name),
-                    ..
-                } => break name,
+        let name = match self.get_token()? {
+            Token {
+                ty: Ty::StringLiteral(name),
+                ..
+            } => name,
 
-                Token {
-                    ty: Ty::MultiLineComment | Ty::SingleLineComment,
-                    ..
-                } => continue,
-
-                _ => return Res::Err(ParsErr::MissingName),
-            }
+            _ => return Res::Err(ParsErr::MissingName),
         };
 
         // TODO: unwrap
-        self.song_length_s = self.parse_expression()?.evaluate(None).unwrap();
-        self.eat_f(match_identifier("s"))?;
+        self.song_length_s = self
+            .parse_expression(|t| {
+                if let Some("s") = t.text() {
+                    Terminate::Yes {
+                        discard_token: true,
+                    }
+                } else {
+                    Terminate::No
+                }
+            })?
+            .evaluate(None)
+            .unwrap();
 
         self.song_channels = match self.parse_chan()? {
             Channels::One(channels) => channels,
@@ -148,7 +148,7 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
         }
     }
 
-    fn eat_f<F>(&mut self, f: F) -> Res<Token<'s, S>, ParsErr<S::Error>>
+    fn _eat_f<F>(&mut self, f: F) -> Res<Token<'s, S>, ParsErr<S::Error>>
     where
         F: FnOnce(&Token<'s, S>) -> bool,
     {
@@ -173,14 +173,37 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
 
         self.eat(Ty::LeftParenthesis)?;
 
-        let freq = self.parse_expression()?;
-        // match self.get_token()?.ty {
-        //     Ty::NumberLiteral(n) => n.into(),
-        //     ty => return Res::Err(ParsErr::Unexpected(ty)),
-        // };
-        self.eat_f(match_identifier("hz"))?;
+        let ty = match wave_type {
+            "sin" | "sine" | "saw" | "tri" | "triangle" | "square" => {
+                let freq = self.parse_expression(|t| {
+                    if let Some("Hz" | "hz") = t.text() {
+                        Terminate::Yes {
+                            discard_token: true,
+                        }
+                    } else {
+                        Terminate::No
+                    }
+                })?;
 
-        self.eat(Ty::Comma)?;
+                self.eat(Ty::Comma)?;
+
+                SourceType::Periodic {
+                    freq,
+                    phase: Expression::zero(),
+                    ty: match wave_type {
+                        "sin" => PeriodicSource::Sine,
+                        "sine" => PeriodicSource::Sine,
+                        "saw" => PeriodicSource::Saw,
+                        "tri" | "triangle" => PeriodicSource::Triangle,
+                        "square" => PeriodicSource::Square,
+
+                        _ => unreachable!(),
+                    },
+                }
+            }
+
+            _ => return Res::Err(ParsErr::Unexpected(wave_type_t.ty)),
+        };
 
         let (start, end) = self.parse_timeframe(self.song_length_s)?;
 
@@ -199,27 +222,6 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
 
             self.eat(Ty::RightCurlyBraces)?;
         }
-
-        let ty = match wave_type {
-            "sin" | "sine" => gen::SourceType::Sine {
-                freq,
-                phase: Expression::Lit(Number::Real(0.)),
-            },
-            "saw" => gen::SourceType::Saw {
-                freq,
-                phase: Expression::Lit(Number::Real(0.)),
-            },
-            "tri" | "triangle" => gen::SourceType::Triangle {
-                freq,
-                phase: Expression::Lit(Number::Real(0.)),
-            },
-            "square" => gen::SourceType::Square {
-                freq,
-                phase: Expression::Lit(Number::Real(0.)),
-            },
-
-            _ => return Res::Err(ParsErr::Unexpected(wave_type_t.ty)),
-        };
 
         Res::Some(gen::Source {
             start,
@@ -268,12 +270,7 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
     fn parse_vol(&mut self) -> Res<Expression, ParsErr<S::Error>> {
         self.eat(Ty::AtSign)?;
 
-        // match self.get_token()?.ty {
-        //     Ty::NumberLiteral(n) => Res::Some(n.into()),
-
-        //     ty => Res::Err(ParsErr::Unexpected(ty)),
-        // }
-        self.parse_expression()
+        self.parse_expression(|_| Terminate::No)
     }
 
     fn parse_time_unit(&mut self) -> Res<f64, ParsErr<S::Error>> {
@@ -350,7 +347,10 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
         Res::Some((start, end))
     }
 
-    fn parse_expression(&mut self) -> Res<Expression, ParsErr<S::Error>> {
+    fn parse_expression<F>(&mut self, mut terminate: F) -> Res<Expression, ParsErr<S::Error>>
+    where
+        F: FnMut(&Token<'s, S>) -> Terminate,
+    {
         let mut output_queue = vec![];
         let mut ops = vec![];
 
@@ -384,6 +384,13 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
         // while there are tokens to be read:
         //     read a token
         while let Res::Some(t) = self.get_token() {
+            if let Terminate::Yes { discard_token } = terminate(&t) {
+                if !discard_token {
+                    self.buffer.push(t);
+                }
+                break;
+            }
+
             match t.ty {
                 // if the token is:
                 // - a number:
@@ -500,10 +507,10 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
             output_queue.push(t);
         }
 
-        println!(
-            "{:?}",
-            output_queue.iter().map(|t| &t.ty).collect::<Vec<_>>()
-        );
+        // println!(
+        //     "{:?}",
+        //     output_queue.iter().map(|t| &t.ty).collect::<Vec<_>>()
+        // );
 
         let expr = Expression::construct(&mut output_queue);
 
@@ -513,7 +520,7 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
     }
 }
 
-fn match_identifier<'name, 's, S: Source>(
+fn _match_identifier<'name, 's, S: Source>(
     name: &'name str,
 ) -> impl 'name + FnOnce(&Token<'s, S>) -> bool {
     move |t| match t.ty {
@@ -628,6 +635,10 @@ impl Expression {
             _ => unreachable!(),
         }
     }
+
+    pub fn zero() -> Expression {
+        Expression::Lit(Number::Real(0.))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -693,4 +704,46 @@ impl FromStr for MathFunc {
             _ => return Err(()),
         })
     }
+}
+
+impl Display for MathFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MathFunc::Sin => write!(f, "sin"),
+            MathFunc::Cos => write!(f, "cos"),
+            MathFunc::Tan => write!(f, "tan"),
+            MathFunc::Ln => write!(f, "ln"),
+            MathFunc::Log10 => write!(f, "log10"),
+            MathFunc::Log2 => write!(f, "log2"),
+            MathFunc::Sqrt => write!(f, "sqrt"),
+            MathFunc::Abs => write!(f, "abs"),
+            MathFunc::Round => write!(f, "round"),
+            MathFunc::Floor => write!(f, "floor"),
+            MathFunc::Ceil => write!(f, "ceil"),
+            MathFunc::Rad => write!(f, "rad"),
+            MathFunc::Deg => write!(f, "deg"),
+        }
+    }
+}
+
+impl Display for Expression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expression::Add(a, b) => write!(f, "{a} + {b}"),
+            Expression::Sub(a, b) => write!(f, "{a} - {b}"),
+            Expression::Mul(a, b) => write!(f, "{a} * {b}"),
+            Expression::Div(a, b) => write!(f, "{a} / {b}"),
+            Expression::Pow(a, b) => write!(f, "{a}^{b}"),
+            Expression::Mod(a, b) => write!(f, "{a} % {b}"),
+            Expression::Call(a, b) => write!(f, "{a}({b})"),
+            Expression::VarOrConst(a) => write!(f, "{a}"),
+            Expression::Lit(a) => write!(f, "{a}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Terminate {
+    Yes { discard_token: bool },
+    No,
 }

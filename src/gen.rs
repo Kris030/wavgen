@@ -1,4 +1,7 @@
-use std::f64::consts::{PI, TAU};
+use std::{
+    f64::consts::{PI, TAU},
+    fmt::Display,
+};
 
 use crate::parse::{Expression, ExpressionError};
 
@@ -18,6 +21,32 @@ impl Song {
     }
     pub fn channels(&self) -> usize {
         self.channels
+    }
+}
+
+pub fn print_song(s: &Song) {
+    println!("'{}': {}s, {} channels", s.name, s.length(), s.channels);
+    for s in &s.sources {
+        print!("  ");
+        match &s.ty {
+            SourceType::Periodic { freq, phase, ty } => {
+                print!("{freq} Hz (phase: {phase}) {ty}",);
+            }
+        }
+
+        println!(
+            " {}:{}, volume: {}, channels: {}",
+            s.start, s.end, s.volume, s.channels
+        );
+
+        for e in &s.effects {
+            print!("    ");
+            match e.ty {
+                EffectType::FadeIn => print!("fade in"),
+                EffectType::FadeOut => print!("fade out"),
+            }
+            println!(" {}:{}", e.start, e.end);
+        }
     }
 }
 
@@ -49,12 +78,42 @@ impl Channels {
     }
 }
 
+impl Display for Channels {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Channels::List(l) => write!(f, "{l:?}"),
+            Channels::One(c) => write!(f, "{c}"),
+            Channels::All => write!(f, "all"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum SourceType {
-    Sine { freq: Expression, phase: Expression },
-    Saw { freq: Expression, phase: Expression },
-    Square { freq: Expression, phase: Expression },
-    Triangle { freq: Expression, phase: Expression },
+    Periodic {
+        freq: Expression,
+        phase: Expression,
+        ty: PeriodicSource,
+    },
+}
+
+#[derive(Debug)]
+pub enum PeriodicSource {
+    Sine,
+    Saw,
+    Square,
+    Triangle,
+}
+
+impl Display for PeriodicSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PeriodicSource::Sine => write!(f, "sine"),
+            PeriodicSource::Saw => write!(f, "saw"),
+            PeriodicSource::Square => write!(f, "square"),
+            PeriodicSource::Triangle => write!(f, "triangle"),
+        }
+    }
 }
 
 impl SourceType {
@@ -63,10 +122,17 @@ impl SourceType {
         let gi = Some(gi);
 
         Ok(match self {
-            Self::Sine { freq, phase } => sine(t, freq.evaluate(gi)?, phase.evaluate(gi)?),
-            Self::Saw { freq, phase } => saw(t, freq.evaluate(gi)?, phase.evaluate(gi)?),
-            Self::Square { freq, phase } => square(t, freq.evaluate(gi)?, phase.evaluate(gi)?),
-            Self::Triangle { freq, phase } => triangle(t, freq.evaluate(gi)?, phase.evaluate(gi)?),
+            Self::Periodic { freq, phase, ty } => {
+                let phase = phase.evaluate(gi)?;
+                let freq = freq.evaluate(gi)?;
+
+                match ty {
+                    PeriodicSource::Sine => sine(t, freq, phase),
+                    PeriodicSource::Saw => saw(t, freq, phase),
+                    PeriodicSource::Square => square(t, freq, phase),
+                    PeriodicSource::Triangle => triangle(t, freq, phase),
+                }
+            }
         })
     }
 }

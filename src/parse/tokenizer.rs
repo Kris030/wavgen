@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use thiserror::Error as ThisError;
 
 use super::source::{Diagnostic, DiagnosticLevel, Source};
@@ -23,6 +25,14 @@ impl From<i64> for Number {
 impl From<f64> for Number {
     fn from(value: f64) -> Self {
         Self::Real(value)
+    }
+}
+impl Display for Number {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Number::Real(r) => write!(f, "{r}"),
+            Number::Integer(i) => write!(f, "{i}"),
+        }
     }
 }
 
@@ -171,7 +181,7 @@ impl<'s, S> From<&TokenPosition<'s, S>> for std::ops::Range<usize> {
     }
 }
 
-impl<'s, S> Token<'s, S> {
+impl<'s, S: Source> Token<'s, S> {
     pub fn new(t_type: TokenType, position: TokenPosition<'s, S>) -> Self {
         Self {
             ty: t_type,
@@ -186,12 +196,17 @@ impl<'s, S> Token<'s, S> {
     pub fn t_type(&self) -> &TokenType {
         &self.ty
     }
+
+    pub fn text(&self) -> Option<&'s str> {
+        self.position.get_text()
+    }
 }
 
 #[derive(Debug)]
 pub struct Tokenizer<'d, 's, S> {
     diagnostics: &'d mut Vec<Diagnostic<'s, S>>,
     emit_whitespace: bool,
+    emit_comments: bool,
     buffer: Vec<char>,
     lines: Vec<usize>,
     column: usize,
@@ -235,6 +250,7 @@ impl<'d, 's, S: Source> Tokenizer<'d, 's, S> {
 
         Self {
             emit_whitespace: false,
+            emit_comments: false,
             diagnostics,
             buffer: vec![],
             lines: vec![0],
@@ -298,21 +314,24 @@ impl<'d, 's, S: Source> Tokenizer<'d, 's, S> {
     }
 
     pub fn get_next(&mut self) -> Result<Option<Token<'s, S>>, TokenizerError<S::Error>> {
-        if self.emit_whitespace {
-            self.get_next_with_whitespace()
-        } else {
-            loop {
-                match self.get_next_with_whitespace()? {
-                    Some(t) if t.ty == TokenType::Whitespace => continue,
-                    t => return Ok(t),
-                };
-            }
+        loop {
+            match self.get_next_nofilter()? {
+                Some(Token {
+                    ty: TokenType::Whitespace,
+                    ..
+                }) if !self.emit_whitespace => continue,
+
+                Some(Token {
+                    ty: TokenType::SingleLineComment | TokenType::MultiLineComment,
+                    ..
+                }) if !self.emit_comments => continue,
+
+                t => return Ok(t),
+            };
         }
     }
 
-    fn get_next_with_whitespace(
-        &mut self,
-    ) -> Result<Option<Token<'s, S>>, TokenizerError<S::Error>> {
+    fn get_next_nofilter(&mut self) -> Result<Option<Token<'s, S>>, TokenizerError<S::Error>> {
         let start_line = self.lines.len() - 1;
         let start = self.absolute_pos;
 
