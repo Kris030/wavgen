@@ -1,18 +1,16 @@
 use crate::{
     gen::{self, GenInfo, Song},
-    parse::ExpressionError,
+    parse,
 };
 
-pub fn generate_pcm(
-    song: &mut Song,
-    samplerate: usize,
-    bytes_per_sample: usize,
-) -> Result<Vec<u8>, ExpressionError> {
+pub fn generate_pcm(song: &mut Song, samplerate: usize) -> Result<Vec<u8>, parse::ExpressionError> {
+    const BYTES_PER_SAMPLE: usize = std::mem::size_of::<i16>();
+
     let samples = (samplerate as f64 * song.length_s) as usize;
 
-    let mut data = vec![0; samples * song.channels * bytes_per_sample];
+    let mut data = vec![0; samples * song.channels * BYTES_PER_SAMPLE];
     for i in 0..samples {
-        let offs = i * song.channels * bytes_per_sample;
+        let offs = i * song.channels * BYTES_PER_SAMPLE;
         let t = i as f64 / samplerate as f64;
 
         for channel in 0..song.channels {
@@ -24,11 +22,10 @@ pub fn generate_pcm(
             let sample = gen::get_sample(song, gi)?;
             let sample = (sample * i16::MAX as f64) as i16;
 
-            let data_start = offs + channel * bytes_per_sample;
-            let data_end = data_start + bytes_per_sample;
-            let data_pos = data_start..data_end;
+            let data_start = offs + channel * BYTES_PER_SAMPLE;
+            let data_end = data_start + BYTES_PER_SAMPLE;
 
-            data[data_pos].copy_from_slice(&sample.to_le_bytes());
+            data[data_start..data_end].copy_from_slice(&sample.to_le_bytes());
         }
     }
 

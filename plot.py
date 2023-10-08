@@ -8,7 +8,7 @@ import wave
 import sys
 
 parser = argparse.ArgumentParser(description='Plot da wave')
-parser.add_argument('input_file', help='the wav file ya retard')
+parser.add_argument('--input_file', '-i', default='test.wav', help='the wav file ya retard')
 args = parser.parse_args()
 
 def f():
