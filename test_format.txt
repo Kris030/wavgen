@@ -1,9 +1,5 @@
-// 1 + (pi - 3) ^ 3
+"Phase test"
+	5s on 1
 
-"My Track 123"
-	1 + 1s on 1
-
-tri((1 - t) * 60hz, :1s) on * @ 0.25 + 0.75 * (1 - t) {
-	fade_in :0.025
-	// fade_out 0.8:
-}
+sin(500 hz, 0 rad, :5s) on * @ 0.66 {}
+sin(500 * 3 hz, t * 270 deg, :5s) on * @ 0.33 {}

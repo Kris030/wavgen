@@ -1,4 +1,5 @@
 use std::{
+    f64::consts::PI,
     fmt::{Debug, Display},
     str::FromStr,
 };
@@ -187,9 +188,36 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
 
                 self.eat(Ty::Comma)?;
 
+                let mut rad = false;
+                let phase = self.parse_expression(|t| {
+                    if let Some("rad") = t.text() {
+                        rad = true;
+                        Terminate::Yes {
+                            discard_token: true,
+                        }
+                    } else if let Some("deg") = t.text() {
+                        rad = false;
+                        Terminate::Yes {
+                            discard_token: true,
+                        }
+                    } else {
+                        Terminate::No
+                    }
+                })?;
+                self.eat(Ty::Comma)?;
+
+                let phase = if rad {
+                    phase
+                } else {
+                    Expression::Mul(
+                        phase.into(),
+                        Expression::Lit(Number::Real(PI / 180.)).into(),
+                    )
+                };
+
                 SourceType::Periodic {
                     freq,
-                    phase: Expression::zero(),
+                    phase,
                     ty: match wave_type {
                         "sin" => PeriodicSource::Sine,
                         "sine" => PeriodicSource::Sine,
@@ -206,7 +234,6 @@ impl<'d, 's, S: Source> Parser<'d, 's, S> {
         };
 
         let (start, end) = self.parse_timeframe(self.song_length_s)?;
-
         self.eat(Ty::RightParenthesis)?;
 
         let channels = self.parse_chan()?;
